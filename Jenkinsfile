@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     tools{
-        jdk "jdk17"
+        jdk "JDK17"
         maven "maven3"
     }
     
@@ -39,33 +39,35 @@ pipeline {
             steps {
                 script{
                 withSonarQubeEnv('sonar') {
-                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName = boardGame -Dsonar.projectKey = boardGame \
-                           -Dsonar.java.binaries = . '''
+                    
+                    sh "$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=boardGame -Dsonar.projectKey=boardGame -Dsonar.sources=."
+                           
                 }  }
             }
         }
 
     
    
-        stage('Quality Gate') {
-            steps {
-                script{
-                    waitForQualityGate abortPipeline: false, credentialsID: "sonar-token"
-                }
-            }
-        }
+       // stage('Quality Gate') {
+         //   steps {
+           //     script{
+             //       waitForQualityGate abortPipeline: false, credentialsID: "sonar-token"
+               // }
+            //}
+        //}
  
     
     
         stage('Build') {
             steps {
-                sh "mvn package"
+                sh "mvn clean package"
+                
             }
         }
         
         stage('Publish Artifact to Nexus') {
             steps {
-                withMaven(globalMavenSettingsConfig: 'Global-settings', jdk: 'jdk17', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
+                withMaven(globalMavenSettingsConfig: 'Global-settings', jdk: 'JDK17', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
                     sh "mvn deploy"    
                 }
             }
@@ -74,9 +76,8 @@ pipeline {
         stage('Build and Tag Image') {
             steps {
                 script{
-                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
-                       sh "docker build -f bjadhav22/mavenapp:latest ."
-                    }
+                    
+                    docker.build("bjadhav22/mavenapp:latest", ".")
                 }
             }
         }
@@ -85,11 +86,12 @@ pipeline {
             steps {
                 script{
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
-                       sh "docker push  bjadhav22/mavenapp:latest ."
+                       sh "docker push bjadhav22/mavenapp:latest"
                     }
                 }
             }
         }
 
-    }
+   }
+
 }
