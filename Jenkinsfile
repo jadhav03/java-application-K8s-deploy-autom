@@ -78,11 +78,22 @@ pipeline {
                 script{
                     
                     docker.build("bjadhav22/mavenapp:latest", ".")
+                    
+                    // This step should not normally be used in your script. Consult the inline help for details.
+                   //withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                     //  sh "ls -l"
+                     //  sh "docker build -f bjadhav22/mavenapp:latest game/Dockerfile"
+   
+                    
+                    //withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                      // sh "ls -l"
+                       //sh "docker build -f bjadhav22/mavenapp:latest ."
+                    //}
                 }
             }
         }
         
-         stage('Push Image') {
+        stage('Push Image') {
             steps {
                 script{
                     withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
@@ -91,7 +102,25 @@ pipeline {
                 }
             }
         }
+        
+        stage('Deploy K8s') {
+            steps {
+                    withKubeConfig(caCertificate: '', clusterName: 'kubernetes', contextName: '', credentialsId: 'k8s-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://10.0.1.7:6443') {
+                        sh 'kubectl apply -f deployment-service.yaml'
+                    }
+                }
+        }
+        
+        
+        stage('Check Deployment') {
+            steps {
+                    withKubeConfig(caCertificate: '', clusterName: 'kubernetes', contextName: '', credentialsId: 'k8s-cred', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://10.0.1.7:6443') {
+                        sh 'kubectl get pods -n webapps'
+                        sh 'kubectl get svc -n webapps'
+                    }
+            }
+        }
 
-   }
-
+        
+    }
 }
