@@ -56,7 +56,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'azu-webapp01/pre-prduction'
+          app-name: 'azu-webapp01'
           slot-name: 'pre-prduction'
           package: '*.jar'
           
