@@ -56,7 +56,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'azu-webapp01'
+          app-name: 'azu-webapp01/dev-environment'
           slot-name: 'dev-environment'
           package: '*.jar'
           
