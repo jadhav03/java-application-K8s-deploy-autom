@@ -58,5 +58,5 @@ jobs:
         with:
           app-name: 'azu-webapp01'
           slot-name: 'Production'
-          package: '*.war'
+          package: '*.jar'
           
