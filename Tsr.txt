@@ -1,0 +1,23 @@
+stages:
+- stage: UpdateManifest
+  displayName: "Update Deployment Manifest with Latest Image"
+  jobs:
+    - job: UpdateDeploymentJob
+      displayName: "Update deployment manifest"
+      pool:
+        vmImage: 'ubuntu-latest'
+      steps:
+        - task: Bash@3
+          displayName: "Replace image placeholder in manifest"
+          inputs:
+            targetType: 'inline'
+            script: |
+              echo "Latest image: $(latestImage)"
+              # Assuming your manifest is in the k8s folder and contains a placeholder <IMAGE_PLACEHOLDER>
+              sed -i "s|<IMAGE_PLACEHOLDER>|$(latestImage)|g" $(Build.SourcesDirectory)/k8s/deployment.yaml
+              cat $(Build.SourcesDirectory)/k8s/deployment.yaml
+        - task: PublishBuildArtifacts@1
+          displayName: "Publish updated manifest artifact"
+          inputs:
+            PathtoPublish: '$(Build.SourcesDirectory)/k8s'
+            ArtifactName: 'manifests'
