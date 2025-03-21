@@ -1,0 +1,175 @@
+trigger:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: environment
+    displayName: "Select Environment"
+    type: string
+    default: "Dev"
+    values:
+      - Dev
+      - QA
+      - Prod
+
+variables:
+  azureSubscription: 'AzureServiceConnection'
+  resourceGroup: 'aks-resource-group'
+  aksClusterName: 'aks-cluster-$(environment)'
+  nodePoolName: 'nodepool-$(environment)'
+  namespace: 'app-namespace'
+  environment: ${{ parameters.environment }}
+
+stages:
+  - stage: PreChecks
+    displayName: "Pre-Patching Validations"
+    jobs:
+      - deployment: ValidateCluster
+        displayName: "Validate AKS Cluster Health"
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Login to Azure & Get AKS Credentials"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az aks get-credentials --resource-group $(resourceGroup) --name $(aksClusterName) --overwrite-existing
+                      echo "Checking cluster info..."
+                      kubectl cluster-info
+                      echo "Checking node health..."
+                      kubectl get nodes -o wide
+                      echo "Checking pending pods..."
+                      kubectl get pods -A --field-selector=status.phase!=Running
+
+  - stage: Approval
+    displayName: "Approval Stage (QA/Prod)"
+    dependsOn: PreChecks
+    condition: and(succeeded(), or(eq(variables['environment'], 'QA'), eq(variables['environment'], 'Prod')))
+    jobs:
+      - job: ManualApproval
+        displayName: "Waiting for Approval"
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            displayName: "Approve Patching in $(environment)"
+            timeoutInMinutes: 60
+            instructions: "Please approve the patching process for $(environment)."
+
+  - stage: Patching
+    displayName: "Patch AKS Nodes"
+    dependsOn: 
+      - PreChecks
+      - Approval
+    condition: succeeded()
+    jobs:
+      - deployment: PatchNodes
+        displayName: "Upgrade AKS Node Pool & Reboot Nodes"
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Bash@3
+                  displayName: "Drain Nodes (Pause Workloads)"
+                  continueOnError: true
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      nodes=$(kubectl get nodes -o=jsonpath='{.items[*].metadata.name}')
+                      for node in $nodes; do
+                        echo "Draining node: $node"
+                        kubectl drain $node --ignore-daemonsets --delete-local-data --force --grace-period=60
+                      done
+
+                - task: AzureCLI@2
+                  displayName: "Upgrade AKS Node Pool"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az aks nodepool upgrade --resource-group $(resourceGroup) --cluster-name $(aksClusterName) --name $(nodePoolName) --node-image-only --yes
+
+                - task: Bash@3
+                  displayName: "Uncordon Nodes (Resume Workloads)"
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      nodes=$(kubectl get nodes -o=jsonpath='{.items[*].metadata.name}')
+                      for node in $nodes; do
+                        echo "Uncordoning node: $node"
+                        kubectl uncordon $node
+                      done
+
+  - stage: PostValidation
+    displayName: "Post-Patching Validation"
+    dependsOn: Patching
+    condition: succeeded()
+    jobs:
+      - deployment: ValidateAfterPatch
+        displayName: "Check Cluster Health After Patching"
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: Bash@3
+                  displayName: "Validate Nodes"
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      echo "Checking node status..."
+                      kubectl get nodes -o wide
+
+                - task: Bash@3
+                  displayName: "Validate Running Pods"
+                  inputs:
+                    targetType: 'inline'
+                    script: |
+                      echo "Checking pod status..."
+                      kubectl get pods -A --field-selector=status.phase!=Running
+
+  - stage: TriggerCD
+    displayName: "Trigger Deployment Pipeline"
+    dependsOn: PostValidation
+    condition: succeeded()
+    jobs:
+      - job: TriggerCD
+        displayName: "Trigger Continuous Deployment"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Trigger CD Pipeline"
+            inputs:
+              azureSubscription: $(azureSubscription)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                az pipelines run --name 'CD-Pipeline-For-Deployment' --parameters environment=$(environment)
+
+  - stage: Rollback
+    displayName: "Rollback on Failure"
+    dependsOn: Patching
+    condition: failed()
+    jobs:
+      - deployment: RollbackNodes
+        displayName: "Rollback to Previous Node Image"
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Rollback Node Pool"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      echo "Rolling back AKS Node Pool..."
+                      az aks nodepool upgrade --resource-group $(resourceGroup) --cluster-name $(aksClusterName) --name $(nodePoolName) --rollback
