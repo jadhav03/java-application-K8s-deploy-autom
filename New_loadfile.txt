@@ -1,0 +1,50 @@
+trigger:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: environment
+    displayName: "Select Environment"
+    type: string
+    default: "Dev"
+    values:
+      - Dev
+      - QA
+      - Prod
+
+stages:
+  - stage: LoadConfig
+    displayName: "Load Environment Configuration"
+    jobs:
+      - job: LoadConfig
+        displayName: "Fetch Environment Variables"
+        environment: ${{ parameters.environment }}
+        steps:
+          - script: |
+              echo "Environment: $(environment)"
+              echo "Azure Subscription: $(azureSubscription)"
+              echo "Resource Group: $(resourceGroup)"
+              echo "AKS Cluster: $(aksClusterName)"
+              echo "Node Pool: $(nodePoolName)"
+            displayName: "Verify Loaded Variables"
+
+  - stage: Patching
+    displayName: "Patch AKS Nodes"
+    dependsOn: LoadConfig
+    jobs:
+      - deployment: PatchNodes
+        displayName: "Upgrade AKS Node Pool"
+        environment: ${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Upgrade Node Pool"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az aks nodepool upgrade --resource-group $(resourceGroup) --cluster-name $(aksClusterName) --name $(nodePoolName) --node-image-only --yes
