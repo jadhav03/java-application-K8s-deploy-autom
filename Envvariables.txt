@@ -1,0 +1,4 @@
+azureSubscription = AzureServiceConnection
+resourceGroup     = aks-dev-rg
+aksClusterName    = aks-dev-cluster
+nodePoolName      = nodepool-dev
