@@ -1,0 +1,131 @@
+trigger: none
+
+pool:
+  vmImage: 'windows-latest'  # Running on Windows Agent
+
+variables:
+  azureSubscription: '<Azure-Service-Connection-Name>'  # Replace with your Azure DevOps service connection
+  resourceGroupName: '<Resource-Group-Name>'           # Replace with your AKS resource group
+  aksClusterName: '<AKS-Cluster-Name>'                 # Replace with your AKS cluster name
+  targetKubernetesVersion: '<Target-K8s-Version>'      # Replace with the desired Kubernetes version
+  rollbackVersion: '<Rollback-K8s-Version>'            # Replace with the last stable version
+  emailRecipients: '<your-email@example.com>'          # Replace with email for notifications
+
+stages:
+
+# Stage 1: Pre-Check & Approval
+- stage: PreCheck_Approval
+  displayName: "Pre-Check & Manual Approval"
+  jobs:
+  - job: PreCheck
+    displayName: "Check Available Versions & Validate"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Login to Azure & Get AKS Details"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          Write-Host "Checking available Kubernetes versions..."
+          az aks get-upgrades --resource-group $(resourceGroupName) --name $(aksClusterName) --output table
+
+          Write-Host "Current Kubernetes version:"
+          az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" --output table
+
+  - job: ManualApproval
+    displayName: "Manual Approval Required"
+    dependsOn: PreCheck
+    steps:
+    - task: ManualValidation@0
+      displayName: "Approve or Reject AKS Upgrade"
+      timeoutInMinutes: 60
+      inputs:
+        instructions: "Please review the Kubernetes versions and approve the upgrade."
+        onTimeout: "reject"
+
+# Stage 2: Upgrade AKS Cluster
+- stage: Upgrade_AKS
+  displayName: "Upgrade AKS Cluster"
+  dependsOn: PreCheck_Approval
+  condition: succeeded()
+  jobs:
+  - job: UpgradeCluster
+    displayName: "Upgrade AKS"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Upgrade AKS Cluster"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          Write-Host "Starting upgrade of AKS cluster to version $(targetKubernetesVersion)..."
+          try {
+            az aks upgrade --resource-group $(resourceGroupName) --name $(aksClusterName) --kubernetes-version $(targetKubernetesVersion) --yes
+            Write-Host "Upgrade successful!"
+          } catch {
+            Write-Host "UPGRADE_FAILED" | Out-File -FilePath upgrade_status.txt
+            exit 1
+          }
+
+    - task: AzureCLI@2
+      displayName: "Verify Upgrade"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          Write-Host "Verifying AKS upgrade..."
+          az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" --output table
+
+    - powershell: |
+        if (Test-Path "upgrade_status.txt") {
+          Write-Host "Upgrade failed, triggering rollback..."
+          exit 1
+        }
+      displayName: "Check Upgrade Status"
+
+# Stage 3: Rollback (On Failure)
+- stage: Rollback_AKS
+  displayName: "Rollback AKS Cluster (On Failure)"
+  dependsOn: Upgrade_AKS
+  condition: failed()
+  jobs:
+  - job: RollbackCluster
+    displayName: "Rollback AKS"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Rollback to Previous Version"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: 'pscore'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          Write-Host "Rolling back AKS cluster to version $(rollbackVersion)..."
+          az aks upgrade --resource-group $(resourceGroupName) --name $(aksClusterName) --kubernetes-version $(rollbackVersion) --yes
+
+# Stage 4: Notifications
+- stage: Notify
+  displayName: "Send Notification"
+  dependsOn:
+    - Upgrade_AKS
+    - Rollback_AKS
+  condition: always()
+  jobs:
+  - job: SendEmail
+    displayName: "Send Email Notification"
+    steps:
+    - powershell: |
+        $status = "SUCCESS"
+        if ("$(Agent.JobStatus)" -eq "Failed") {
+          $status = "ROLLBACK PERFORMED"
+        }
+
+        $subject = "AKS Upgrade Status"
+        $body = "The AKS upgrade process has completed with status: $status"
+        $smtpServer = "smtp.yourmailserver.com"  # Replace with actual SMTP server
+        $from = "no-reply@yourdomain.com"  # Replace with a valid sender email
+        $to = "$(emailRecipients)"
+        Send-MailMessage -From $from -To $to -Subject $subject -Body $body -SmtpServer $smtpServer
+      displayName: "Send Email on Upgrade/Rollback Status"
