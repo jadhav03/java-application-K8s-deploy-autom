@@ -1,10 +1,61 @@
+trigger: none
+
 variables:
   CLUSTER_NAME: "my-aks-cluster"
   RESOURCE_GROUP: "my-resource-group"
+  AZURE_SERVICE_CONNECTION: "My-Azure-Service-Connection"
 
+stages:
+
+# 🔹 Stage 1: Fetch Current & Next Kubernetes Version
+- stage: Fetch_Versions
+  displayName: "Fetch Kubernetes Versions"
+  jobs:
+  - job: GetVersions
+    displayName: "Get Current & Next Kubernetes Version"
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: "Fetch AKS Versions"
+      inputs:
+        azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
+        scriptType: "ps"
+        scriptLocation: "inlineScript"
+        inlineScript: |
+          $currentVersion = $(az aks show --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) --query "kubernetesVersion" --output tsv)
+          $nextVersion = $(az aks get-upgrades --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) --query "controlPlaneProfile.upgrades[0].kubernetesVersion" --output tsv)
+
+          echo "Fetched Current Version: $currentVersion"
+          echo "Fetched Next Version: $nextVersion"
+
+          echo "##vso[task.setvariable variable=CURRENT_K8S_VERSION;isOutput=true]$currentVersion"
+          echo "##vso[task.setvariable variable=TARGET_K8S_VERSION;isOutput=true]$nextVersion"
+    name: FetchVars  # Important for referencing outputs
+
+# 🔹 Stage 2: Manual Approval with Version Information
+- stage: Manual_Approval
+  displayName: "Manual Approval for AKS Upgrade"
+  dependsOn: Fetch_Versions
+  variables:
+    CURRENT_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.CURRENT_K8S_VERSION'] ]
+    TARGET_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.TARGET_K8S_VERSION'] ]
+  jobs:
+  - job: Approval
+    displayName: "Manual Approval Required"
+    pool: server  # Runs on DevOps Server (No agent required)
+    steps:
+    - task: ManualValidation@0
+      displayName: "Approval Required for AKS Upgrade"
+      inputs:
+        notifyUsers: "your-email@example.com"
+        instructions: "Approve the upgrade from $(CURRENT_K8S_VERSION) to $(TARGET_K8S_VERSION)."
+        timeoutInMinutes: 60  # 1 hour approval window
+
+# 🔹 Stage 3: Upgrade AKS After Approval
 - stage: Upgrade_AKS
   displayName: "Upgrade AKS Cluster"
-  dependsOn: Fetch_Versions
+  dependsOn: Manual_Approval
   variables:
     CURRENT_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.CURRENT_K8S_VERSION'] ]
     TARGET_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.TARGET_K8S_VERSION'] ]
@@ -14,10 +65,15 @@ variables:
     pool:
       vmImage: 'windows-latest'
     steps:
+    - script: |
+        echo "Current Kubernetes Version: $(CURRENT_K8S_VERSION)"
+        echo "Target Kubernetes Version: $(TARGET_K8S_VERSION)"
+      displayName: "Debug: Show Fetched Variables"
+
     - task: AzureCLI@2
       displayName: "Upgrade AKS Cluster"
       inputs:
-        azureSubscription: "My-Azure-Service-Connection"
+        azureSubscription: "$(AZURE_SERVICE_CONNECTION)"
         scriptType: "ps"
         scriptLocation: "inlineScript"
         inlineScript: |
