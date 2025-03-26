@@ -1,0 +1,25 @@
+variables:
+  CLUSTER_NAME: "my-aks-cluster"
+  RESOURCE_GROUP: "my-resource-group"
+
+- stage: Upgrade_AKS
+  displayName: "Upgrade AKS Cluster"
+  dependsOn: Fetch_Versions
+  variables:
+    CURRENT_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.CURRENT_K8S_VERSION'] ]
+    TARGET_K8S_VERSION: $[ stageDependencies.Fetch_Versions.GetVersions.outputs['FetchVars.TARGET_K8S_VERSION'] ]
+  jobs:
+  - job: UpgradeCluster
+    displayName: "Upgrade AKS"
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: "Upgrade AKS Cluster"
+      inputs:
+        azureSubscription: "My-Azure-Service-Connection"
+        scriptType: "ps"
+        scriptLocation: "inlineScript"
+        inlineScript: |
+          echo "Upgrading AKS from $(CURRENT_K8S_VERSION) to $(TARGET_K8S_VERSION)"
+          az aks upgrade --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) --kubernetes-version $(TARGET_K8S_VERSION) --yes
