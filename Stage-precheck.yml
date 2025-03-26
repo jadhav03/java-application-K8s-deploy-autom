@@ -1,0 +1,16 @@
+- stage: PreCheck_Approval
+  displayName: "Pre-Check & Manual Approval"
+  jobs:
+  - deployment: ApprovalGate
+    displayName: "Waiting for Approval"
+    environment: 'AKS-Upgrade-Approval'  # Environment in Azure DevOps
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: ManualValidation@0
+            displayName: "Approve or Reject AKS Upgrade"
+            timeoutInMinutes: 60
+            inputs:
+              instructions: "Please review the Kubernetes versions and approve the upgrade."
+              onTimeout: "reject"
