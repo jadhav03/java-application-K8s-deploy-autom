@@ -1,16 +1,102 @@
-- stage: PreCheck_Approval
-  displayName: "Pre-Check & Manual Approval"
+trigger: none  # Runs manually
+
+variables:
+  CLUSTER_NAME: "my-aks-cluster"
+  RESOURCE_GROUP: "my-resource-group"
+  CURRENT_K8S_VERSION: "1.23.5"
+  TARGET_K8S_VERSION: "1.24.0"
+  UPGRADE_WINDOW: "10:00 PM - 12:00 AM UTC"
+
+stages:
+
+# 1️⃣ **Manual Approval in Azure DevOps Portal**
+- stage: Manual_Approval
+  displayName: "Manual Approval Required"
   jobs:
-  - deployment: ApprovalGate
-    displayName: "Waiting for Approval"
-    environment: 'AKS-Upgrade-Approval'  # Environment in Azure DevOps
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: ManualValidation@0
-            displayName: "Approve or Reject AKS Upgrade"
-            timeoutInMinutes: 60
-            inputs:
-              instructions: "Please review the Kubernetes versions and approve the upgrade."
-              onTimeout: "reject"
+  - job: WaitForApproval
+    displayName: "Waiting for Manual Approval"
+    pool: server  # Uses Azure DevOps Agent (not a VM)
+    steps:
+    - task: ManualValidation@0
+      displayName: "Approve AKS Upgrade"
+      inputs:
+        notifyUsers: "approver@example.com"  # Replace with Azure DevOps user email
+        instructions: |
+          **Cluster Upgrade Approval Needed**
+          - **Cluster Name:** $(CLUSTER_NAME)
+          - **Resource Group:** $(RESOURCE_GROUP)
+          - **Current Kubernetes Version:** $(CURRENT_K8S_VERSION)
+          - **Target Kubernetes Version:** $(TARGET_K8S_VERSION)
+          - **Upgrade Window:** $(UPGRADE_WINDOW)
+
+          Click 'Resume' to approve the upgrade, or 'Reject' to stop it.
+        onTimeout: "reject"  # Auto reject if not approved in time
+
+# 2️⃣ **Upgrade AKS Cluster After Approval**
+- stage: Upgrade_AKS
+  displayName: "Upgrade AKS Cluster"
+  dependsOn: Manual_Approval
+  condition: succeeded()  # Only runs if approved
+  jobs:
+  - job: UpgradeCluster
+    displayName: "Upgrade AKS"
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: "Login to Azure using Service Principal"
+      inputs:
+        azureSubscription: "My-Azure-Service-Connection"
+        scriptType: "ps"
+        scriptLocation: "inlineScript"
+        inlineScript: |
+          az login --service-principal -u $(AZURE_CLIENT_ID) -p $(AZURE_CLIENT_SECRET) --tenant $(AZURE_TENANT_ID)
+
+    - task: AzureCLI@2
+      displayName: "Upgrade AKS Cluster"
+      inputs:
+        azureSubscription: "My-Azure-Service-Connection"
+        scriptType: "ps"
+        scriptLocation: "inlineScript"
+        inlineScript: |
+          az aks upgrade --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) --kubernetes-version $(TARGET_K8S_VERSION) --yes
+
+# 3️⃣ **Rollback If Upgrade Fails**
+- stage: Rollback_AKS
+  displayName: "Rollback AKS Cluster (On Failure)"
+  dependsOn: Upgrade_AKS
+  condition: failed()
+  jobs:
+  - job: RollbackApproval
+    displayName: "Confirm Rollback Action"
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: ManualValidation@0
+      displayName: "Approve Rollback"
+      inputs:
+        notifyUsers: "approver@example.com"
+        instructions: |
+          **Cluster Upgrade Failed!**
+          - **Cluster Name:** $(CLUSTER_NAME)
+          - **Resource Group:** $(RESOURCE_GROUP)
+          - **Current Version:** $(CURRENT_K8S_VERSION)
+          - **Upgrade Target:** $(TARGET_K8S_VERSION)
+
+          Click 'Resume' to proceed with rollback, or 'Reject' to cancel rollback.
+        onTimeout: "reject"
+
+  - job: RollbackCluster
+    displayName: "Rollback AKS Cluster"
+    dependsOn: RollbackApproval
+    pool:
+      vmImage: 'windows-latest'
+    steps:
+    - task: AzureCLI@2
+      displayName: "Rollback AKS to Previous Version"
+      inputs:
+        azureSubscription: "My-Azure-Service-Connection"
+        scriptType: "ps"
+        scriptLocation: "inlineScript"
+        inlineScript: |
+          az aks upgrade --resource-group $(RESOURCE_GROUP) --name $(CLUSTER_NAME) --kubernetes-version $(CURRENT_K8S_VERSION) --yes
