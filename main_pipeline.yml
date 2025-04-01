@@ -1,0 +1,136 @@
+trigger: none
+
+pool:
+  vmImage: 'windows-latest'  
+
+variables:
+  azureSubscription: 'AzureCloud' 
+  resourceGroupName: 'aks-cluster-test'           
+  aksClusterName: 'aks-newcluster'                 
+
+stages:
+# Stage 1: Pre-Check & Approval
+- stage: PreCheck_Cluster
+  displayName: "Pre-Check & Manual Approval"
+  jobs:
+  - job: PreCheck
+    displayName: "Check Available Versions & Validate"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Login to Azure & Get AKS Details"
+      inputs:
+        azureSubscription: '$(azureSubscription)'
+        scriptType: 'ps'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+          Write-Host "Checking available Kubernetes versions..."
+          az aks get-upgrades --resource-group $(resourceGroupName) --name $(aksClusterName) --output table
+          $currentVersion = $(az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" --output tsv)
+          Write-Output  "Current Version: $currentVersion"
+
+          Write-Host "Current Kubernetes version:"
+          az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" --output table
+          $nextVersion = $(az aks get-upgrades --resource-group $(resourceGroupName) --name $(aksClusterName) --query "controlPlaneProfile.upgrades[0].kubernetesVersion" --output tsv)
+          Write-Output "Target Version: $nextVersion"
+
+          Write-Host "##vso[task.setvariable variable=CURRENT_K8S_VERSION;isOutput=true]$currentVersion"
+          Write-Host "##vso[task.setvariable variable=TARGET_K8S_VERSION;isOutput=true]$nextVersion"
+      name: FetchVars  # Important for referencing outputs
+
+# Stage 2 : Approval
+- stage: Pre_Upgrade_Approval
+  displayName: Approval Pre_Upgrade
+  dependsOn: PreCheck_Cluster
+  condition: succeeded()
+  variables:
+    CURRENT_K8S_VERSION: $[ stageDependencies.PreCheck_Cluster.PreCheck.outputs['FetchVars.CURRENT_K8S_VERSION'] ]
+    TARGET_K8S_VERSION: $[ stageDependencies.PreCheck_Cluster.PreCheck.outputs['FetchVars.TARGET_K8S_VERSION'] ]
+  jobs:
+  - job: ApprovalJob
+    displayName: Approval For AKS Upgrade 
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      displayName: 'Await Approval'
+      inputs:
+        notifyUsers: 'bhushanjadhav220398@gmail.com'
+        instructions: |
+          - Cluster Upgrade Approval Needed
+          - Cluster Name: $(aksClusterName)
+          - Resource Group: $(resourceGroupName)
+          - Current Kubernetes Version: $(CURRENT_K8S_VERSION)
+          - Target Kubernetes Version: $(TARGET_K8S_VERSION)
+          Click 'Aprroved' to approve the upgrade, or 'Reject' to stop it.
+        onTimeout: "reject"  
+
+          
+
+
+# Stage 3: Upgrade AKS Cluster
+- stage: Upgrade_AKS_Cluster
+  displayName: Upgrade AKS Cluster
+  dependsOn: Pre_Upgrade_Approval
+  condition: succeeded()
+  variables:
+    CURRENT_K8S_VERSION: $[ stageDependencies.PreCheck_Cluster.PreCheck.outputs['FetchVars.CURRENT_K8S_VERSION'] ]
+    TARGET_K8S_VERSION: $[ stageDependencies.PreCheck_Cluster.PreCheck.outputs['FetchVars.TARGET_K8S_VERSION'] ]
+  jobs:
+  - job: UpgradeCluster
+    displayName: "Upgrade AKS"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Upgrade AKS Cluster"
+      inputs:
+        azureSubscription: '$(azureSubscription)'
+        scriptType: 'ps'
+        scriptLocation: 'inlineScript'
+        inlineScript: |
+
+          Write-Output "Starting upgrade of AKS cluster to version $(TARGET_K8S_VERSION)"
+        
+          try{
+            az aks upgrade --resource-group $(resourceGroupName) --name $(aksClusterName) --kubernetes-version $(TARGET_K8S_VERSION) --yes
+            Write-Host "Upgrade successful!"
+          } catch {
+            Write-Host "Upgrade Failed!"
+          }
+
+# Stage 4: Validate AKS Upgrade
+- stage: Validate_AKS_Upgrade
+  displayName: "Validate AKS Upgrade"
+  dependsOn: Upgrade_AKS_Cluster
+  condition: succeeded()
+  variables:
+    TARGET_K8S_VERSION: $[ stageDependencies.PreCheck_Cluster.PreCheck.outputs['FetchVars.TARGET_K8S_VERSION'] ]
+  jobs:
+    - job: ValidateUpgrade
+      displayName: "Validate AKS Upgrade"
+      steps:
+        - task: AzureCLI@2
+          displayName: "Fetch Current AKS Version"
+          inputs:
+            azureSubscription: '$(azureSubscription)'
+            scriptType: 'ps'
+            scriptLocation: 'inlineScript'
+            inlineScript: |
+              Write-Host "Fetching current Kubernetes version from AKS..."
+              
+              $postUpgradeVersion = $(az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" --output tsv)
+              
+              Write-Output "Current AKS Version: $postUpgradeVersion"
+              Write-Output "Target AKS Version: $TARGET_K8S_VERSION"
+              
+              
+              Write-Host "Validating AKS upgrade..."
+              
+              $targetVersion = "$(TARGET_K8S_VERSION)"
+              
+              if ($postUpgradeVersion -eq $targetVersion) {
+                  Write-Host "Upgrade Validation: SUCCESS - AKS is running the target version!"
+              } else {
+                  Write-Host "Current Version: $postUpgradeVersion"
+                  Write-Host "Expected Version: $targetVersion"
+                  Write-Host "Validation failed. Upgrade did not apply correctly!"
+                  exit 1
+              }
+
