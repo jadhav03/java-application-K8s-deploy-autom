@@ -1,0 +1,55 @@
+# Stage 4: Validate AKS Upgrade
+stage: Validate_AKS_Upgrade
+displayName: "Validate AKS Upgrade"
+dependsOn: Upgrade_AKS_Cluster
+condition: succeeded()
+
+jobs:
+  - job: ValidateUpgrade
+    displayName: "Validate AKS Upgrade"
+    pool:
+      vmImage: 'windows-latest'
+
+    steps:
+      - task: AzureCLI@2
+        displayName: "Fetch Current AKS Version"
+        inputs:
+          azureSubscription: $(azureSubscription)
+          scriptType: 'pscore'
+          scriptLocation: 'inlineScript'
+          inlineScript: |
+            Write-Host "Fetching current Kubernetes version from AKS..."
+            
+            # Fetch current version after upgrade
+            $currentVersion = az aks show --resource-group $(resourceGroupName) --name $(aksClusterName) --query "kubernetesVersion" -o tsv
+            
+            Write-Host "Current AKS Version: $currentVersion"
+            Write-Host "Target AKS Version: $(TARGET_KBS_VERSION)"
+
+            # Set fetched version to a pipeline variable
+            echo "##vso[task.setvariable variable=postUpgradeVersion]$currentVersion"
+
+      - powershell: |
+          Write-Host "Validating AKS upgrade..."
+          
+          $currentVersion = "$(postUpgradeVersion)"
+          $targetVersion = "$(TARGET_KBS_VERSION)"
+
+          if ($currentVersion -eq $targetVersion) {
+              Write-Host "Upgrade Validation: SUCCESS - AKS is running the target version!"
+              echo "##vso[task.setvariable variable=upgradeValidationStatus]success"
+          } else {
+              Write-Host "##vso[task.logissue type=error] Upgrade Validation FAILED! AKS is not running the expected version."
+              Write-Host "Current Version: $currentVersion"
+              Write-Host "Expected Version: $targetVersion"
+              echo "##vso[task.setvariable variable=upgradeValidationStatus]failed"
+              exit 1
+          }
+        displayName: "Compare Current & Target Version"
+
+      - script: |
+          if [ "$(upgradeValidationStatus)" == "failed" ]; then
+            Write-Host "##vso[task.logissue type=error] Validation failed. Upgrade did not apply correctly!"
+            exit 1
+          fi
+        displayName: "Check Validation Result"
