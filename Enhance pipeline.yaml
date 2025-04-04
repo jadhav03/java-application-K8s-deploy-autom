@@ -1,0 +1,45 @@
+trigger: none  # Adjust trigger as needed
+
+pool:
+  vmImage: windows-latest  # Windows agent
+
+variables:
+  azureSubscription: "<your-service-connection-name>"
+  resourceGroup: "<your-resource-group-name>"
+  aksCluster: "<your-aks-cluster-name>"
+
+stages:
+- stage: OSImageUpgrade
+  displayName: "Upgrade OS Image for AKS Node Pools"
+  jobs:
+  - job: FetchAndUpgradeOSImage
+    displayName: "Check and Upgrade OS Image for Node Pools"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Login to Azure & Check Node Pool OS Version"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: pscore  # Use PowerShell Core for Windows agent
+        scriptLocation: inlineScript
+        inlineScript: |
+          Write-Host "Fetching node pools for AKS cluster $(aksCluster)..."
+          $nodePools = az aks nodepool list --resource-group $(resourceGroup) --cluster-name $(aksCluster) --query "[].name" -o tsv
+
+          foreach ($pool in $nodePools) {
+              Write-Host "Checking OS version for node pool: $pool"
+
+              # Fetch current OS image version
+              $currentOS = az aks nodepool show --resource-group $(resourceGroup) --cluster-name $(aksCluster) --name $pool --query "osSKU" -o tsv
+              
+              # Fetch latest available OS image version
+              $latestOS = az aks nodepool show --resource-group $(resourceGroup) --cluster-name $(aksCluster) --name $pool --query "latestOSSKU" -o tsv
+
+              if ($currentOS -ne $latestOS) {
+                  Write-Host "Upgrading OS image for node pool: $pool"
+                  az aks nodepool upgrade --resource-group $(resourceGroup) --cluster-name $(aksCluster) --name $pool --update-os --no-wait
+              } else {
+                  Write-Host "Node pool '$pool' is already at the latest OS version. Skipping upgrade."
+              }
+          }
+
+          Write-Host "OS image upgrade process completed."
