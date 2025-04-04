@@ -1,0 +1,33 @@
+trigger: none  # Adjust trigger as needed
+
+pool:
+  vmImage: windows-latest  # Windows agent
+
+variables:
+  azureSubscription: "<your-service-connection-name>"
+  resourceGroup: "<your-resource-group-name>"
+  aksCluster: "<your-aks-cluster-name>"
+
+stages:
+- stage: OSImageUpgrade
+  displayName: "Upgrade OS Image for AKS Node Pools"
+  jobs:
+  - job: FetchAndUpgradeOSImage
+    displayName: "Fetch and Upgrade OS Image for Node Pools"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Login to Azure & Upgrade OS Image"
+      inputs:
+        azureSubscription: $(azureSubscription)
+        scriptType: pscore  # Use PowerShell Core for Windows agent
+        scriptLocation: inlineScript
+        inlineScript: |
+          Write-Host "Fetching node pools for AKS cluster $(aksCluster)..."
+          $nodePools = az aks nodepool list --resource-group $(resourceGroup) --cluster-name $(aksCluster) --query "[].name" -o tsv
+
+          foreach ($pool in $nodePools) {
+              Write-Host "Upgrading OS image for node pool: $pool"
+              az aks nodepool upgrade --resource-group $(resourceGroup) --cluster-name $(aksCluster) --name $pool --update-os --no-wait
+          }
+
+          Write-Host "All node pools OS image upgrade initiated."
