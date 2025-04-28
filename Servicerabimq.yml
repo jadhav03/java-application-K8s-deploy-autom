@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    app: rabbitmq  # This should match the label of the RabbitMQ deployment
+  ports:
+    - protocol: TCP
+      port: 5672    # The RabbitMQ message broker port
+      targetPort: 5672
+    - protocol: TCP
+      port: 15672   # The RabbitMQ management console port
+      targetPort: 15672
+  type: ClusterIP  # By default, this service will only be accessible within the cluster
