@@ -1,0 +1,16 @@
+Defender for Cloud – AKS Node Vulnerability Finding
+
+Observation:
+During Defender for Cloud scans, vulnerabilities were identified on the AKS cluster related to outdated node pull versions. This indicates that certain node pools are running older base images or runtime components, which could expose the cluster to known security threats.
+
+Impact:
+Outdated node images can have unpatched vulnerabilities in the underlying container runtime or OS, increasing the risk of potential exploits or unauthorized access.
+
+Remediation Approach:
+We already have an automated pipeline in place for upgrading AKS node pools. As part of the remediation plan, we will trigger node pool upgrades to ensure all nodes are running the latest supported images with necessary security patches.
+
+Next Steps:
+
+Monitor Defender for Cloud after node pool upgrades for any remaining findings.
+
+Regularly schedule node pool upgrades through the existing pipeline to maintain compliance.
