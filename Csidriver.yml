@@ -1,0 +1,27 @@
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: rabbitmq-secrets
+spec:
+  provider: azure
+  secretObjects:
+    - secretName: rabbitmq-secrets
+      type: Opaque
+      data:
+        - objectName: rabbitmq-username
+          key: username
+        - objectName: rabbitmq-password
+          key: password
+  parameters:
+    usePodIdentity: "false"  # Set to true if using managed identity
+    keyvaultName: "<your-keyvault-name>"
+    objects: |
+      array:
+        - |
+          objectName: rabbitmq-username
+          objectType: secret
+        - |
+          objectName: rabbitmq-password
+          objectType: secret
+    tenantId: "<your-tenant-id>"
+  rotationPollInterval: "2m"  # For auto-sync of secret updates
