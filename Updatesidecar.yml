@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-writer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-writer
+  template:
+    metadata:
+      labels:
+        app: log-writer
+    spec:
+      containers:
+      - name: main-container
+        image: busybox
+        env:
+        - name: FILENAME
+          value: "app.log"
+        command: ["sh", "-c"]
+        args:
+          - |
+            mkdir -p /log && \
+            touch /log/$FILENAME && \
+            echo "Log started at $(date)" >> /log/$FILENAME && \
+            while true; do echo "$(date) Hello from main container" >> /log/$FILENAME; sleep 10; done
