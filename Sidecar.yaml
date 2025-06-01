@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: log-app
+  template:
+    metadata:
+      labels:
+        app: log-app
+    spec:
+      containers:
+      - name: main-container
+        image: busybox
+        env:
+        - name: FILENAME
+          value: "app.log"
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo "Main container writing to file: $FILENAME" > /logs/$FILENAME && \
+            while true; do echo "$(date) Writing to /logs/$FILENAME" >> /logs/$FILENAME; sleep 10; done
+        volumeMounts:
+        - name: shared-logs
+          mountPath: /logs
+
+      - name: sidecar-container
+        image: busybox
+        command: ["sh", "-c"]
+        args:
+          - |
+            echo "Sidecar container reading the log file..." && \
+            while true; do cat /logs/app.log; sleep 15; done
+        volumeMounts:
+        - name: shared-logs
+          mountPath: /logs
+
+      volumes:
+      - name: shared-logs
+        emptyDir: {}
